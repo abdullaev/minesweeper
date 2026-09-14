@@ -7,7 +7,7 @@ import { ExplosionEffect } from './explosion';
 import type { Difficulty } from './game';
 
 const icons = {
-  mine: '<circle cx="12" cy="12" r="5"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/><circle cx="10.5" cy="10.5" r=".7" fill="currentColor" stroke="none"/>',
+  mine: '<path d="M12 2v4m0 12v4M2 12h4m12 0h4M4.8 4.8l2.8 2.8m8.8 8.8 2.8 2.8M4.8 19.2l2.8-2.8m8.8-8.8 2.8-2.8" stroke-width="2.6"/><path d="M10.5 2h3M10.5 22h3M2 10.5v3m20-3v3M3.8 5.8l2-2m12.4 16.4 2-2M3.8 18.2l2 2M18.2 3.8l2 2" stroke-width="1.4"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M12 4.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15Zm-4.9 6.3a.8.8 0 0 0 1.55.4 3.5 3.5 0 0 1 2.55-2.55.8.8 0 0 0-.4-1.55 5.1 5.1 0 0 0-3.7 3.7Zm7.4 4.7a1 1 0 1 0 2 0 1 1 0 0 0-2 0Z"/>',
   flag: '<path d="M5 21V3m0 1c5-4 9 4 14 0v10c-5 4-9-4-14 0"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   reset: '<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/>',
