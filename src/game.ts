@@ -1,3 +1,5 @@
+import { isSolvable } from './solver';
+
 export const DIFFICULTIES = {
   beginner: { label: 'Новичок', width: 9, height: 9, mines: 10 },
   intermediate: { label: 'Любитель', width: 16, height: 16, mines: 40 },
@@ -12,7 +14,7 @@ export interface Cell {
   revealed: boolean;
   flagged: boolean;
 }
-export interface Config { width: number; height: number; mines: number }
+export interface Config { width: number; height: number; mines: number; noGuess?: boolean }
 export interface GameSnapshot {
   cells: Cell[];
   status: Status;
@@ -137,17 +139,26 @@ export class Minesweeper {
   }
 
   private placeMines(first: number): void {
-    const safe = new Set([first, ...this.neighbors(first)]);
+    const neighbors = this.cells.map((_, index) => this.neighbors(index));
+    const safe = new Set([first, ...neighbors[first]]);
     const candidates = this.cells.map((_, index) => index).filter(index => !safe.has(index));
-    // Partial Fisher–Yates: every eligible cell has the same chance of a mine.
-    for (let i = 0; i < this.config.mines; i++) {
-      const j = i + Math.floor(this.random() * (candidates.length - i));
-      [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
-      this.cells[candidates[i]].mine = true;
+    for (let attempt = 0; attempt < (this.config.noGuess ? 2000 : 1); attempt++) {
+      this.cells.forEach(cell => { cell.mine = false; cell.adjacent = 0; });
+      // Partial Fisher–Yates: every eligible cell has the same chance of a mine.
+      for (let i = 0; i < this.config.mines; i++) {
+        const j = i + Math.floor(this.random() * (candidates.length - i));
+        [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+        this.cells[candidates[i]].mine = true;
+      }
+      this.cells.forEach((cell, index) => {
+        cell.adjacent = neighbors[index].filter(i => this.cells[i].mine).length;
+      });
+      if (!this.config.noGuess || isSolvable(first, neighbors, this.config.mines,
+        index => this.cells[index].mine ? -1 : this.cells[index].adjacent)) return;
     }
-    this.cells.forEach((cell, index) => {
-      cell.adjacent = this.neighbors(index).filter(i => this.cells[i].mine).length;
-    });
+    // Never silently fall back to an unchecked board if generation is exhausted.
+    this.cells.forEach(cell => { cell.mine = false; cell.adjacent = 0; });
+    throw new Error('Не удалось подобрать поле без угадываний. Попробуй ещё раз.');
   }
 
   private open(indices: number[], now: number): void {

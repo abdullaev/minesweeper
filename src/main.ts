@@ -4,7 +4,7 @@ import './style.css';
 import { DIFFICULTIES, Minesweeper } from './game';
 import { GameAudio } from './audio';
 import { ExplosionEffect } from './explosion';
-import type { Difficulty } from './game';
+import type { Difficulty, GameSnapshot } from './game';
 
 const icons = {
   mine: '<path d="M12 2v4m0 12v4M2 12h4m12 0h4M4.8 4.8l2.8 2.8m8.8 8.8 2.8 2.8M4.8 19.2l2.8-2.8m8.8-8.8 2.8-2.8" stroke-width="2.6"/><path d="M10.5 2h3M10.5 22h3M2 10.5v3m20-3v3M3.8 5.8l2-2m12.4 16.4 2-2M3.8 18.2l2 2M18.2 3.8l2 2" stroke-width="1.4"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M12 4.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15Zm-4.9 6.3a.8.8 0 0 0 1.55.4 3.5 3.5 0 0 1 2.55-2.55.8.8 0 0 0-.4-1.55 5.1 5.1 0 0 0-3.7 3.7Zm7.4 4.7a1 1 0 1 0 2 0 1 1 0 0 0-2 0Z"/>',
@@ -27,17 +27,20 @@ function icon(name: keyof typeof icons, className = ''): string {
   return `<svg class="icon ${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
 }
 
-type Preferences = { difficulty: Difficulty; bests: Partial<Record<Difficulty, number>>; theme: 'auto' | 'light' | 'dark'; sound: boolean };
-const preferences: Preferences = { difficulty: 'beginner', bests: {}, theme: 'auto', sound: true };
+type Preferences = { difficulty: Difficulty; bests: Partial<Record<Difficulty, number>>; noGuessBests: Partial<Record<Difficulty, number>>; noGuess: boolean; theme: 'auto' | 'light' | 'dark'; sound: boolean };
+const preferences: Preferences = { difficulty: 'beginner', bests: {}, noGuessBests: {}, noGuess: true, theme: 'auto', sound: true };
 try {
   const saved = JSON.parse(localStorage.getItem('minefield:v1') ?? '{}');
   if (saved && typeof saved === 'object') {
     if (Object.hasOwn(DIFFICULTIES, saved.difficulty)) preferences.difficulty = saved.difficulty;
     if (saved.theme === 'light' || saved.theme === 'dark') preferences.theme = saved.theme;
     if (typeof saved.sound === 'boolean') preferences.sound = saved.sound;
+    if (typeof saved.noGuess === 'boolean') preferences.noGuess = saved.noGuess;
     for (const difficulty of Object.keys(DIFFICULTIES) as Difficulty[]) {
-      const best = saved.bests?.[difficulty];
-      if (typeof best === 'number' && Number.isInteger(best) && best >= 0) preferences.bests[difficulty] = best;
+      for (const key of ['bests', 'noGuessBests'] as const) {
+        const best = saved[key]?.[difficulty];
+        if (typeof best === 'number' && Number.isInteger(best) && best >= 0) preferences[key][difficulty] = best;
+      }
     }
   }
 } catch { /* The game also works when browser storage is unavailable. */ }
@@ -50,7 +53,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="app-shell" data-screen="level">
     <header class="app-header">
       <div class="header-start"><span class="brand" id="brand">сапёр<span>.</span></span><button class="back-button" id="back-to-levels" hidden>${icon('back')} Уровни</button></div>
-      <span class="header-title" id="game-label"></span>
+      <span class="header-title"><span id="game-label"></span><span class="game-mode-label" id="game-mode-label"></span></span>
       <div class="header-actions">
         <button class="icon-button" id="restart" title="Новая игра (R)" aria-label="Начать новую игру" hidden>${icon('reset')}</button>
         <button class="icon-button" id="help-open" title="Как играть" aria-label="Как играть">${icon('help')}</button>
@@ -62,6 +65,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <main class="stage">
       <section class="level-screen" id="level-screen" aria-labelledby="level-title">
         <h1 id="level-title" tabindex="-1">Выбери уровень</h1>
+        <label class="no-guess-option"><input type="checkbox" id="no-guess" aria-describedby="no-guess-description"><span><strong>Без угадываний</strong><span id="no-guess-description">Каждый ход можно вывести логически</span></span></label>
         <div class="level-list">
           ${Object.entries(DIFFICULTIES).map(([key, config], i) => `<button class="level-button" data-difficulty="${key}"><span class="level-symbol" aria-hidden="true">${'▮'.repeat(i + 1)}</span><span class="level-info"><strong>${config.label}</strong><span>${config.width} × ${config.height} · ${config.mines} мин</span><span class="level-best" data-best="${key}" hidden></span></span>${icon('arrow', 'level-arrow')}</button>`).join('')}
         </div>
@@ -77,6 +81,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           </div>
           <progress id="progress" value="0" max="71" aria-label="Открыто безопасных клеток"></progress>
         </div>
+        <p class="generation-message" id="generation-message" role="status" hidden></p>
         <div class="board-frame"><div class="board-scroll" id="board-scroll" role="region" aria-label="Игровое поле с прокруткой" tabindex="-1"><div id="board" class="board" role="grid" aria-label="Минное поле" aria-describedby="board-instructions"></div></div><div class="explosion-overlay" id="explosion-overlay" aria-hidden="true" hidden></div></div>
         <div class="game-toolbar" id="game-toolbar">
           <div class="mode-switch" id="mode-switch" role="group" aria-label="Режим нажатия"><button id="mode-open" aria-pressed="true">${icon('cursor')} Открыть</button><button id="mode-flag" aria-pressed="false">${icon('flag')} Флаг</button></div>
@@ -92,6 +97,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <p class="sr-only" id="board-instructions">Стрелки — выбор клетки. Enter или пробел — открыть. F — флаг. Цифра показывает число мин рядом.</p>
   <dialog id="help-dialog" aria-labelledby="help-title"><div class="help-header"><h2 id="help-title">Как играть</h2><button class="icon-button" id="help-close" aria-label="Закрыть справку">${icon('close')}</button></div>
     <p>Открой все клетки без мин. Цифра — число мин рядом. Первый ход безопасный.</p>
+    <p>«Без угадываний» выбирается перед началом игры. Поле проверяется после первого клика: его можно полностью решить по открытым цифрам и общему числу мин. Ошибиться всё ещё можно — открывай только клетки, в безопасности которых уверен. Рекорды для этого режима хранятся отдельно.</p>
     <dl class="help-controls"><div><dt>Открыть</dt><dd>Клик / касание</dd></div><div><dt>Флаг</dt><dd>Правый клик / долгое нажатие</dd></div><div><dt>Открыть соседей</dt><dd>Нажми на цифру, когда флагов вокруг столько же. Ошибочный флаг может привести к взрыву.</dd></div><div><dt>Очки</dt><dd>10 за каждую открытую клетку без мины</dd></div></dl>
     <p class="keyboard-help"><kbd>← ↑ ↓ →</kbd> выбор · <kbd>Enter</kbd> открыть<br><kbd>F</kbd> флаг · <kbd>R</kbd> заново</p>
   </dialog>`;
@@ -101,7 +107,7 @@ const board = element('board');
 const status = element('game-status');
 type Screen = 'level' | 'game';
 let screen: Screen = 'level';
-let game = new Minesweeper(DIFFICULTIES[preferences.difficulty]);
+let game = new Minesweeper({ ...DIFFICULTIES[preferences.difficulty], noGuess: preferences.noGuess });
 let hasGame = false;
 let buttons: HTMLButtonElement[] = [];
 let activeIndex = 0;
@@ -109,6 +115,8 @@ let mode: 'open' | 'flag' = 'open';
 let recordSaved = false;
 let newRecord = false;
 let resultShown = false;
+let generator: Worker | null = null;
+let generationTimeout: ReturnType<typeof setTimeout> | undefined;
 const helpDialog = element<HTMLDialogElement>('help-dialog');
 const audio = new GameAudio(preferences.sound);
 const explosion = new ExplosionEffect(element('explosion-overlay'));
@@ -119,6 +127,7 @@ function saveGame(): void {
   try {
     localStorage.setItem('minefield:game:v1', JSON.stringify({
       difficulty: preferences.difficulty,
+      noGuess: game.config.noGuess === true,
       game: game.snapshot(),
       screen, mode, activeIndex, recordSaved, newRecord,
     }));
@@ -130,9 +139,11 @@ function restoreGame(): boolean {
     const saved = JSON.parse(localStorage.getItem('minefield:game:v1') ?? 'null');
     if (!saved || !Object.hasOwn(DIFFICULTIES, saved.difficulty) ||
       !['level', 'game'].includes(saved.screen) || !['open', 'flag'].includes(saved.mode) ||
-      typeof saved.recordSaved !== 'boolean' || typeof saved.newRecord !== 'boolean') return false;
+      typeof saved.recordSaved !== 'boolean' || typeof saved.newRecord !== 'boolean' ||
+      (saved.noGuess !== undefined && typeof saved.noGuess !== 'boolean')) return false;
     const difficulty = saved.difficulty as Difficulty;
-    const restored = Minesweeper.restore(DIFFICULTIES[difficulty], saved.game);
+    // Saves made before this mode existed are classic games.
+    const restored = Minesweeper.restore({ ...DIFFICULTIES[difficulty], noGuess: saved.noGuess === true }, saved.game);
     if (!restored || !Number.isInteger(saved.activeIndex) || saved.activeIndex < 0 || saved.activeIndex >= restored.cells.length) return false;
     game = restored;
     preferences.difficulty = difficulty;
@@ -199,23 +210,32 @@ applyTheme();
 
 function updateRecords(): void {
   document.querySelectorAll<HTMLElement>('[data-best]').forEach(label => {
-    const best = preferences.bests[label.dataset.best as Difficulty];
+    const best = (preferences.noGuess ? preferences.noGuessBests : preferences.bests)[label.dataset.best as Difficulty];
     label.hidden = best === undefined;
     label.textContent = best === undefined ? '' : `Рекорд ${formatTime(best)}`;
   });
 }
 
+const noGuessToggle = element<HTMLInputElement>('no-guess');
+noGuessToggle.checked = preferences.noGuess;
+noGuessToggle.addEventListener('change', () => {
+  preferences.noGuess = noGuessToggle.checked;
+  savePreferences();
+  updateRecords();
+});
+
 function showScreen(next: Screen, moveFocus = true): void {
   cancelPress();
   suppressClick = false;
   screen = next;
-  if (next === 'level') stopExplosion();
+  if (next === 'level') { stopExplosion(); stopGeneration(); }
   for (const name of ['level', 'game'] as const) element(`${name}-screen`).hidden = name !== next;
   document.querySelector<HTMLElement>('.app-shell')!.dataset.screen = next;
   element('brand').hidden = next !== 'level';
   element('back-to-levels').hidden = next === 'level';
   element('restart').hidden = next !== 'game' || game.finished;
   element('game-label').textContent = next === 'game' ? DIFFICULTIES[preferences.difficulty].label : '';
+  element('game-mode-label').textContent = next === 'game' && game.config.noGuess ? 'Без угадываний' : '';
   element('resume').hidden = !hasGame || game.finished;
   if (moveFocus) {
     if (next === 'game') setActive(activeIndex, true);
@@ -224,11 +244,12 @@ function showScreen(next: Screen, moveFocus = true): void {
   saveGame();
 }
 
-function reset(): void {
+function reset(noGuess = game.config.noGuess === true): void {
   cancelPress();
+  stopGeneration();
   stopExplosion();
   void explosion.preload();
-  game = new Minesweeper(DIFFICULTIES[preferences.difficulty]);
+  game = new Minesweeper({ ...DIFFICULTIES[preferences.difficulty], noGuess });
   hasGame = true;
   recordSaved = false;
   newRecord = false;
@@ -272,10 +293,65 @@ function buildBoard(): void {
 }
 
 function act(index: number, action: 'open' | 'flag'): void {
-  if (game.finished) return;
+  if (game.finished || generator) return;
+  if (action === 'open' && game.status === 'ready' && game.config.noGuess && !game.cells[index].flagged) {
+    generateBoard(index);
+    return;
+  }
   const revealed = game.revealed;
   const changed = action === 'flag' ? game.toggleFlag(index) : game.reveal(index);
   if (!changed) return;
+  finishAction(index, action, revealed);
+}
+
+function stopGeneration(): void {
+  generator?.terminate();
+  generator = null;
+  clearTimeout(generationTimeout);
+  board.setAttribute('aria-busy', 'false');
+  buttons.forEach(button => button.setAttribute('aria-disabled', String(game.finished)));
+  element('generation-message').hidden = true;
+}
+
+function generateBoard(first: number): void {
+  cancelPress();
+  const message = element('generation-message');
+  const fail = (text: string): void => {
+    stopGeneration();
+    message.textContent = text;
+    message.hidden = false;
+  };
+  try {
+    const worker = new Worker(new URL('./generator.worker.ts', import.meta.url), { type: 'module' });
+    generator = worker;
+    message.textContent = 'Подбираем поле без угадываний…';
+    message.hidden = false;
+    board.setAttribute('aria-busy', 'true');
+    buttons.forEach(button => button.setAttribute('aria-disabled', 'true'));
+    worker.onmessage = (event: MessageEvent<{ snapshot?: GameSnapshot; error?: string }>) => {
+      if (generator !== worker) return;
+      const restored = Minesweeper.restore(game.config, event.data.snapshot);
+      if (!restored) {
+        fail(event.data.error ?? 'Не удалось создать поле. Попробуй ещё раз.');
+        return;
+      }
+      stopGeneration();
+      game = restored;
+      finishAction(first, 'open', 0);
+    };
+    worker.onerror = () => {
+      if (generator === worker) fail('Не удалось создать поле. Попробуй ещё раз.');
+    };
+    generationTimeout = setTimeout(() => {
+      if (generator === worker) fail('Подбор поля занял слишком много времени. Попробуй ещё раз.');
+    }, 15000);
+    worker.postMessage({ config: game.config, snapshot: game.snapshot(), first });
+  } catch {
+    fail('Не удалось создать поле. Попробуй ещё раз.');
+  }
+}
+
+function finishAction(index: number, action: 'open' | 'flag', revealed: number): void {
   render();
   saveGame();
   if (game.status === 'won') audio.play('win');
@@ -292,12 +368,13 @@ function act(index: number, action: 'open' | 'flag'): void {
 }
 
 function render(): void {
+  const bests = game.config.noGuess ? preferences.noGuessBests : preferences.bests;
   if (game.status === 'won' && !recordSaved) {
     recordSaved = true;
-    const best = preferences.bests[preferences.difficulty];
+    const best = bests[preferences.difficulty];
     if (best === undefined || game.elapsed() < best) {
       newRecord = true;
-      preferences.bests[preferences.difficulty] = game.elapsed();
+      bests[preferences.difficulty] = game.elapsed();
       savePreferences();
       updateRecords();
     }
@@ -338,7 +415,7 @@ function render(): void {
     element('result-panel').dataset.outcome = game.status;
     element('result-symbol').innerHTML = icon(game.status === 'won' ? 'trophy' : 'mine');
     element('result-title').textContent = game.status === 'won' ? 'Победа!' : 'Поражение';
-    element('result-detail').textContent = game.status === 'lost' ? `Открыто ${game.revealed} из ${progress.max}` : newRecord ? 'Новый личный рекорд' : `Рекорд ${formatTime(preferences.bests[preferences.difficulty]!)}`;
+    element('result-detail').textContent = game.status === 'lost' ? `Открыто ${game.revealed} из ${progress.max}` : newRecord ? 'Новый личный рекорд' : `Рекорд ${formatTime(bests[preferences.difficulty]!)}`;
     // Keep the final move visible if the result panel reduces the scroll area.
     if (screen === 'game') {
       setActive(game.exploded ?? activeIndex, true);
@@ -441,8 +518,8 @@ function setMode(next: typeof mode): void {
 }
 element('mode-open').addEventListener('click', () => setMode('open'));
 element('mode-flag').addEventListener('click', () => setMode('flag'));
-element('restart').addEventListener('click', reset);
-element('play-again').addEventListener('click', reset);
+element('restart').addEventListener('click', () => reset());
+element('play-again').addEventListener('click', () => reset());
 element('back-to-levels').addEventListener('click', () => showScreen('level'));
 element('choose-level').addEventListener('click', () => showScreen('level'));
 element('resume').addEventListener('click', () => showScreen('game'));
@@ -458,7 +535,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-difficulty]').forEach(button
     const difficulty = button.dataset.difficulty as Difficulty;
     preferences.difficulty = difficulty;
     savePreferences();
-    reset();
+    reset(preferences.noGuess);
   });
 });
 window.addEventListener('keydown', event => {
