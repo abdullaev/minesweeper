@@ -1,9 +1,10 @@
 import explosionSoundUrl from './assets/explosion-sound.mp3';
 import tickSoundUrl from './assets/tick.mp3';
+import winSoundUrl from './assets/win.mp3';
 
 export type SoundEffect = 'start' | 'open' | 'expand' | 'flag' | 'unflag' | 'win' | 'lose';
 
-/** Synthesized UI sounds and bundled countdown/explosion recordings. */
+/** Synthesized UI sounds and bundled game result recordings. */
 export class GameAudio {
   private context: AudioContext | null = null;
   private output: GainNode | null = null;
@@ -28,9 +29,17 @@ export class GameAudio {
         this.output.connect(this.context.destination);
         void this.loadRecording(tickSoundUrl);
         void this.loadRecording(explosionSoundUrl);
+        void this.loadRecording(winSoundUrl);
       }
       if (this.context.state === 'suspended') void this.context.resume().catch(() => {});
     } catch { /* Unsupported or blocked audio must not interrupt the game. */ }
+  }
+
+  async prepare(effect: 'win' | 'lose'): Promise<void> {
+    this.unlock();
+    if (!this.enabled || !this.context) return;
+    const urls = effect === 'win' ? [winSoundUrl] : [tickSoundUrl, explosionSoundUrl];
+    await Promise.all(urls.map(url => this.loadRecording(url)));
   }
 
   stop(): void {
@@ -64,6 +73,10 @@ export class GameAudio {
           const start = context.currentTime + 0.005;
           if (tick) this.playRecording(tick, start);
           if (explosion) this.playRecording(explosion, start + 2);
+        } else if (effect === 'win') {
+          const win = await this.loadRecording(winSoundUrl);
+          if (!isCurrent()) return;
+          if (win) this.playRecording(win, context.currentTime + 0.005);
         } else {
           this.synthesize(effect, context.currentTime + 0.005);
         }
@@ -99,7 +112,7 @@ export class GameAudio {
     source.start(time);
   }
 
-  private synthesize(effect: Exclude<SoundEffect, 'lose'>, time: number): void {
+  private synthesize(effect: Exclude<SoundEffect, 'lose' | 'win'>, time: number): void {
     switch (effect) {
       case 'start':
         this.tone(392, time, 0.1, 0.35);
@@ -112,11 +125,6 @@ export class GameAudio {
         break;
       case 'flag': this.tone(740, time, 0.11, 0.4, 990); break;
       case 'unflag': this.tone(620, time, 0.09, 0.3, 410); break;
-      case 'win':
-        [523.25, 659.25, 783.99, 1046.5].forEach((frequency, i) => {
-          this.tone(frequency, time + i * 0.105, i === 3 ? 0.3 : 0.18, 0.45);
-        });
-        break;
     }
   }
 

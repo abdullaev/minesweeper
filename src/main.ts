@@ -3,7 +3,9 @@ import '@fontsource-variable/jetbrains-mono';
 import './style.css';
 import { DIFFICULTIES, Minesweeper } from './game';
 import { GameAudio } from './audio';
-import { ExplosionEffect } from './explosion';
+import { GifEffect } from './gif-effect';
+import explosionGifUrl from './assets/cat-explosion.gif';
+import winGifUrl from './assets/win.gif';
 import type { Difficulty, GameSnapshot } from './game';
 
 const icons = {
@@ -82,7 +84,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <progress id="progress" value="0" max="71" aria-label="Открыто безопасных клеток"></progress>
         </div>
         <p class="generation-message" id="generation-message" role="status" hidden></p>
-        <div class="board-frame"><div class="board-scroll" id="board-scroll" role="region" aria-label="Игровое поле с прокруткой" tabindex="-1"><div id="board" class="board" role="grid" aria-label="Минное поле" aria-describedby="board-instructions"></div></div><div class="explosion-overlay" id="explosion-overlay" aria-hidden="true" hidden></div></div>
+        <div class="board-frame"><div class="board-scroll" id="board-scroll" role="region" aria-label="Игровое поле с прокруткой" tabindex="-1"><div id="board" class="board" role="grid" aria-label="Минное поле" aria-describedby="board-instructions"></div></div><div class="result-overlay" id="explosion-overlay" aria-hidden="true" hidden></div><div class="result-overlay" id="win-overlay" aria-hidden="true" hidden></div></div>
         <div class="game-toolbar" id="game-toolbar">
           <div class="mode-switch" id="mode-switch" role="group" aria-label="Режим нажатия"><button id="mode-open" aria-pressed="true">${icon('cursor')} Открыть</button><button id="mode-flag" aria-pressed="false">${icon('flag')} Флаг</button></div>
         </div>
@@ -90,6 +92,15 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <div class="result-summary"><div class="result-heading"><span class="result-symbol" id="result-symbol" aria-hidden="true"></span><h2 id="result-title" tabindex="-1"></h2></div><p class="result-detail" id="result-detail"></p></div>
           <div class="result-actions"><button class="primary-button" id="play-again">${icon('reset')} Ещё раз</button><button class="secondary-button" id="choose-level">Другой уровень</button></div>
         </section>
+        ${import.meta.env.DEV ? `<details class="debug-menu" id="debug-menu">
+          <summary>DEV · Отладка</summary>
+          <p id="debug-hint">Сделай первый ход, чтобы проверить победу или поражение.</p>
+          <div class="debug-actions">
+            <button class="secondary-button" id="debug-win" aria-describedby="debug-hint" disabled>Открыть все безопасные клетки</button>
+            <button class="secondary-button" id="debug-lose" aria-describedby="debug-hint" disabled>Открыть мину</button>
+            <button class="secondary-button" id="debug-reset">Новая игра</button>
+          </div>
+        </details>` : ''}
       </section>
     </main>
   </div>
@@ -119,7 +130,8 @@ let generator: Worker | null = null;
 let generationTimeout: ReturnType<typeof setTimeout> | undefined;
 const helpDialog = element<HTMLDialogElement>('help-dialog');
 const audio = new GameAudio(preferences.sound);
-const explosion = new ExplosionEffect(element('explosion-overlay'));
+const explosion = new GifEffect(element('explosion-overlay'), explosionGifUrl, 4850);
+const victory = new GifEffect(element('win-overlay'), winGifUrl, 20000);
 let soundRevision = 0;
 
 function saveGame(): void {
@@ -160,8 +172,9 @@ function restoreGame(): boolean {
   } catch { return false; }
 }
 
-function stopExplosion(): void {
+function stopResultEffects(): void {
   explosion.stop();
+  victory.stop();
   audio.stop();
 }
 
@@ -183,9 +196,9 @@ element('sound-toggle').addEventListener('click', () => {
 document.addEventListener('pointerdown', () => audio.unlock(), { capture: true, passive: true });
 document.addEventListener('keydown', () => audio.unlock(), { capture: true });
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { saveGame(); stopExplosion(); }
+  if (document.hidden) { saveGame(); stopResultEffects(); }
 });
-window.addEventListener('pagehide', () => { saveGame(); stopExplosion(); });
+window.addEventListener('pagehide', () => { saveGame(); stopResultEffects(); });
 updateSoundButton();
 
 function formatTime(seconds: number): string {
@@ -228,7 +241,7 @@ function showScreen(next: Screen, moveFocus = true): void {
   cancelPress();
   suppressClick = false;
   screen = next;
-  if (next === 'level') { stopExplosion(); stopGeneration(); }
+  if (next === 'level') { stopResultEffects(); stopGeneration(); }
   for (const name of ['level', 'game'] as const) element(`${name}-screen`).hidden = name !== next;
   document.querySelector<HTMLElement>('.app-shell')!.dataset.screen = next;
   element('brand').hidden = next !== 'level';
@@ -247,8 +260,9 @@ function showScreen(next: Screen, moveFocus = true): void {
 function reset(noGuess = game.config.noGuess === true): void {
   cancelPress();
   stopGeneration();
-  stopExplosion();
+  stopResultEffects();
   void explosion.preload();
+  void victory.preload();
   game = new Minesweeper({ ...DIFFICULTIES[preferences.difficulty], noGuess });
   hasGame = true;
   recordSaved = false;
@@ -311,6 +325,7 @@ function stopGeneration(): void {
   board.setAttribute('aria-busy', 'false');
   buttons.forEach(button => button.setAttribute('aria-disabled', String(game.finished)));
   element('generation-message').hidden = true;
+  updateDebugMenu();
 }
 
 function generateBoard(first: number): void {
@@ -324,6 +339,7 @@ function generateBoard(first: number): void {
   try {
     const worker = new Worker(new URL('./generator.worker.ts', import.meta.url), { type: 'module' });
     generator = worker;
+    updateDebugMenu();
     message.textContent = 'Подбираем поле без угадываний…';
     message.hidden = false;
     board.setAttribute('aria-busy', 'true');
@@ -354,20 +370,22 @@ function generateBoard(first: number): void {
 function finishAction(index: number, action: 'open' | 'flag', revealed: number): void {
   render();
   saveGame();
-  if (game.status === 'won') audio.play('win');
-  else if (game.status === 'lost') {
+  if (game.status === 'won' || game.status === 'lost') {
     audio.stop();
+    const effect = game.status === 'won' ? victory : explosion;
+    const sound = game.status === 'won' ? 'win' : 'lose';
     const revision = soundRevision;
     const soundEnabled = preferences.sound;
-    explosion.play(() => {
-      if (soundEnabled && revision === soundRevision) audio.play('lose');
-    });
+    effect.play(() => {
+      if (soundEnabled && revision === soundRevision) audio.play(sound);
+    }, audio.prepare(sound));
   }
   else if (action === 'flag') audio.play(game.cells[index].flagged ? 'flag' : 'unflag');
   else if (game.revealed > revealed) audio.play(game.revealed - revealed > 1 ? 'expand' : 'open');
 }
 
 function render(): void {
+  updateDebugMenu();
   const bests = game.config.noGuess ? preferences.noGuessBests : preferences.bests;
   if (game.status === 'won' && !recordSaved) {
     recordSaved = true;
@@ -518,6 +536,38 @@ function setMode(next: typeof mode): void {
 }
 element('mode-open').addEventListener('click', () => setMode('open'));
 element('mode-flag').addEventListener('click', () => setMode('flag'));
+function updateDebugMenu(): void {
+  if (!import.meta.env.DEV) return;
+  const canFinish = game.status === 'playing' && !generator;
+  element<HTMLButtonElement>('debug-win').disabled = !canFinish;
+  element<HTMLButtonElement>('debug-lose').disabled = !canFinish;
+  element('debug-hint').textContent = generator ? 'Подбираем поле…' : game.finished
+    ? 'Начни новую игру, чтобы повторить проверку.' : canFinish
+      ? 'Завершает игру обычным способом, включая анимацию, звук и запись рекорда.'
+      : 'Сделай первый ход, чтобы проверить победу или поражение.';
+}
+
+if (import.meta.env.DEV) {
+  const finishDebugGame = (outcome: 'win' | 'lose'): void => {
+    if (screen !== 'game' || game.status !== 'playing' || generator) return;
+    cancelPress();
+    const revealed = game.revealed;
+    let last = activeIndex;
+    for (let index = 0; index < game.cells.length; index++) {
+      const cell = game.cells[index];
+      if (cell.revealed || cell.mine !== (outcome === 'lose')) continue;
+      if (cell.flagged) game.toggleFlag(index);
+      game.reveal(index);
+      last = index;
+      if (game.finished) break;
+    }
+    finishAction(last, 'open', revealed);
+  };
+  element('debug-win').addEventListener('click', () => finishDebugGame('win'));
+  element('debug-lose').addEventListener('click', () => finishDebugGame('lose'));
+  element('debug-reset').addEventListener('click', () => reset());
+}
+
 element('restart').addEventListener('click', () => reset());
 element('play-again').addEventListener('click', () => reset());
 element('back-to-levels').addEventListener('click', () => showScreen('level'));

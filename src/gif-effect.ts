@@ -1,20 +1,19 @@
-import explosionGifUrl from './assets/cat-explosion.gif';
-
-// The supplied GIF contains 97 frames, 50 ms each.
-const DURATION = 4850;
-
-export class ExplosionEffect {
+export class GifEffect {
   private asset: Promise<Blob | null> | null = null;
   private animation: Animation | null = null;
   private objectUrl: string | null = null;
   private generation = 0;
 
-  constructor(private readonly host: HTMLElement) {}
+  constructor(
+    private readonly host: HTMLElement,
+    private readonly url: string,
+    private readonly duration: number,
+  ) {}
 
   preload(): Promise<Blob | null> {
-    this.asset ??= fetch(explosionGifUrl)
+    this.asset ??= fetch(this.url)
       .then(response => {
-        if (!response.ok) throw new Error('Could not load explosion GIF');
+        if (!response.ok) throw new Error('Could not load effect GIF');
         return response.blob();
       })
       .catch(() => {
@@ -24,12 +23,12 @@ export class ExplosionEffect {
     return this.asset;
   }
 
-  play(onStart: () => void): void {
+  play(onStart: () => void, ready: Promise<void> = Promise.resolve()): void {
     this.stop();
     if (document.hidden) return;
     const generation = this.generation;
     const isCurrent = (): boolean => generation === this.generation && !document.hidden;
-    void this.preload().then(blob => {
+    void Promise.all([this.preload(), ready]).then(([blob]) => {
       if (!isCurrent()) return;
       if (!blob) {
         onStart();
@@ -48,7 +47,7 @@ export class ExplosionEffect {
           { opacity: 1, offset: 0.08 },
           { opacity: 1, offset: 0.8 },
           { opacity: 0, offset: 1 },
-        ], { duration: DURATION, easing: 'ease-in-out', fill: 'both' });
+        ], { duration: this.duration, easing: 'ease-in-out', fill: 'both' });
         this.animation.onfinish = () => { if (isCurrent()) this.stop(); };
         onStart();
       };
